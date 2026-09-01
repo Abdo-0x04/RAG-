@@ -39,7 +39,7 @@ with st.sidebar:
         api_key_input = st.text_input(
             "Cohere API Key",
             type="password",
-            value=os.environ.get("COHERE_API_KEY", ""),
+            value="",
             help="Get one at dashboard.cohere.com",
         )
         model_name = st.text_input("Model name", value="command-a-03-2025")
@@ -58,7 +58,7 @@ with st.sidebar:
         api_key_input = st.text_input(
             "API Key",
             type="password",
-            value=os.environ.get("OPENAI_API_KEY", ""),
+            value="",
             help="Some local servers (e.g. Ollama) accept any placeholder string here.",
         )
         model_name = st.text_input("Model name", value="gpt-4o-mini")
@@ -74,7 +74,7 @@ with st.sidebar:
     rerank_key_input = st.text_input(
         "Cohere API Key (for Rerank only)",
         type="password",
-        value=os.environ.get("COHERE_API_KEY", ""),
+        value="",
         help="Only needed if you want the Rerank bonus feature; leave blank otherwise.",
     )
     if rerank_key_input:
