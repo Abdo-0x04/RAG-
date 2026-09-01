@@ -1,18 +1,18 @@
-
 # Run with:  streamlit run app.py
 # install all needed packages with:
-# pip install streamlit langchain langchain-community langchain-cohere langchain-openai langchain-text-splitters langchain-huggingface langchain-chroma chromadb cohere pypdf sentence-transformers rank_bm25
-
+# pip install streamlit langchain langchain-community langchain-cohere langchain-openai langchain-text-splitters langchain-huggingface faiss-cpu pypdf sentence-transformers rank_bm25
+import uuid
 import os
 import tempfile
+import time
 from dotenv import load_dotenv
 import streamlit as st
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.retrievers import BM25Retriever
+from langchain_community.vectorstores import FAISS
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableParallel, RunnablePassthrough
 from langchain_cohere import ChatCohere, CohereRerank
-from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_classic.retrievers import ContextualCompressionRetriever, EnsembleRetriever
@@ -93,7 +93,6 @@ def get_embeddings():
         encode_kwargs={"normalize_embeddings": True},
     )
 
-
 @st.cache_resource(show_spinner=False)
 def get_llm(provider: str, model_name: str, base_url: str | None, api_key: str):
     if provider == "Cohere":
@@ -104,7 +103,6 @@ def get_llm(provider: str, model_name: str, base_url: str | None, api_key: str):
         base_url=base_url,
         api_key=api_key,
     )
-
 
 embeddings = get_embeddings()
 llm = get_llm(provider, model_name, base_url, api_key_input)
@@ -117,6 +115,8 @@ if "vectorstore" not in st.session_state:
     st.session_state.vectorstore = None
 if "indexed_files" not in st.session_state:
     st.session_state.indexed_files = set() 
+if "global_bm25" not in st.session_state:
+    st.session_state.global_bm25 = None 
 
 with st.sidebar:
     st.header("1. Upload PDFs")
@@ -143,7 +143,6 @@ def load_and_tag_pdf(file_bytes, filename):
     os.unlink(tmp_path)
     return docs
 
-
 if process_clicked:
     if not uploaded_files:
         st.sidebar.error("Upload at least one PDF first.")
@@ -161,11 +160,14 @@ if process_clicked:
             chunks = splitter.split_documents(all_documents)
             st.session_state.all_chunks = chunks
 
-            st.session_state.vectorstore = Chroma.from_documents(
+            # Build FAISS Vectorstore
+            st.session_state.vectorstore = FAISS.from_documents(
                 documents=chunks,
-                embedding=embeddings,
-                collection_name="streamlit_multi_pdf",
+                embedding=embeddings
             )
+            
+            st.session_state.global_bm25 = BM25Retriever.from_documents(chunks)
+            
         st.sidebar.success(
             f"Indexed {len(uploaded_files)} PDF(s), {len(chunks)} chunks total."
         )
@@ -187,10 +189,12 @@ with st.sidebar:
 
     use_hybrid = st.checkbox("Use hybrid retrieval (semantic + BM25 keyword)", value=True)
     use_rerank = st.checkbox(
-        "Apply Cohere Rerank",
-        value=False,
+        "Apply Cohere Rerank (Advanced)",
+        value=False, 
         disabled=not rerank_available,
-        help=None if rerank_available else "Add a Cohere API key above to enable this.",
+        help="Enables Cohere Rerank v3.5 to boost precision. Requires a Cohere API key."
+        if rerank_available
+        else "Add a Cohere API key in the Setup section to enable reranking.",
     )
 
     if use_hybrid:
@@ -207,17 +211,20 @@ def build_retriever():
 
     search_kwargs = {"k": k}
     if selected_files:
-        search_kwargs["filter"] = {"source_file": {"$in": selected_files}}
+        search_kwargs["filter"] = lambda metadata: metadata.get("source_file") in selected_files
 
     semantic_retriever = vs.as_retriever(search_kwargs=search_kwargs)
 
     if use_hybrid:
-        pool = st.session_state.all_chunks
         if selected_files:
-            pool = [c for c in pool if c.metadata.get("source_file") in selected_files]
-        if not pool:
-            pool = st.session_state.all_chunks  
-        bm25 = BM25Retriever.from_documents(pool)
+            pool = [c for c in st.session_state.all_chunks if c.metadata.get("source_file") in selected_files]
+            if not pool:
+                bm25 = st.session_state.global_bm25
+            else:
+                bm25 = BM25Retriever.from_documents(pool)
+        else:
+            bm25 = st.session_state.global_bm25
+            
         bm25.k = k
 
         base_retriever = EnsembleRetriever(
@@ -236,7 +243,6 @@ def build_retriever():
         )
 
     return base_retriever
-
 
 PROMPT = ChatPromptTemplate.from_template(
     """You are answering questions using ONLY the context below, which may come from
@@ -257,7 +263,6 @@ Question: {question}
 Answer:"""
 )
 
-
 def format_docs(docs):
     if not docs:
         return "No relevant context found."
@@ -267,25 +272,31 @@ def format_docs(docs):
         for d in docs
     )
 
-
 def format_history(messages, max_turns=4):
     recent = messages[-(max_turns * 2):]
     return "\n".join(f"{m['role'].capitalize()}: {m['content']}" for m in recent) or "(none)"
-
 
 def ask(question):
     retriever = build_retriever()
     if retriever is None:
         return "Please upload and process at least one PDF first.", []
 
+    start_time = time.time()
     docs = retriever.invoke(question)
+    retrieval_time = time.time() - start_time
+    print(f"\n--- TIMING REPORT ---")
+    print(f"1. Document Retrieval took: {retrieval_time:.2f} seconds")
+
     context = format_docs(docs)
     history = format_history(st.session_state.messages)
-
     chain = PROMPT | llm
+    
+    start_time = time.time()
     response = chain.invoke({"context": context, "question": question, "history": history})
+    llm_time = time.time() - start_time
+    print(f"2. AI Text Generation took: {llm_time:.2f} seconds\n")
+    
     return response.content, docs
-
 
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
@@ -318,4 +329,3 @@ if question:
     st.session_state.messages.append(
         {"role": "assistant", "content": answer, "sources": sources}
     )
-
