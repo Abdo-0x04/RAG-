@@ -188,7 +188,7 @@ with st.sidebar:
     use_hybrid = st.checkbox("Use hybrid retrieval (semantic + BM25 keyword)", value=True)
     use_rerank = st.checkbox(
         "Apply Cohere Rerank",
-        value=rerank_available,
+        value=False,
         disabled=not rerank_available,
         help=None if rerank_available else "Add a Cohere API key above to enable this.",
     )
