@@ -7,3 +7,4 @@ langchain-chroma
 pypdf
 sentence-transformers
 python-dotenv
+langchain-cohere
