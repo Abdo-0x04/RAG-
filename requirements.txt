@@ -9,3 +9,4 @@ sentence-transformers
 python-dotenv
 langchain-cohere
 rank_bm25
+faiss-cpu
